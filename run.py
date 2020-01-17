@@ -36,6 +36,8 @@ parser.add_argument('--skip_last_layer_nl', action='store_true',
                     help='if present, decoder\'s last layer will not apply non-linearity function')
 parser.add_argument('--num_epochs', type=int, default=50, metavar='N',
                     help='maximum number of epochs')
+parser.add_argument('--save_every', type=int, default=3, metavar='N',
+                    help='save every N number of epochs')
 parser.add_argument('--optimizer', type=str, default="momentum", metavar='N',
                     help='optimizer kind: adam, momentum, adagrad or rmsprop')
 parser.add_argument('--hidden_layers', type=str, default="1024,512,512,128", metavar='N',
@@ -69,8 +71,8 @@ def do_eval(encoder, evaluation_data_layer):
     targets = Variable(eval.cuda().to_dense() if use_gpu else eval.to_dense())
     outputs = encoder(inputs)
     loss, num_ratings = model.MSEloss(outputs, targets)
-    total_epoch_loss += loss.data[0]
-    denom += num_ratings.data[0]
+    total_epoch_loss += loss.item()
+    denom += num_ratings.item()
   return sqrt(total_epoch_loss / denom)
 
 def log_var_and_grad_summaries(logger, layers, global_step, prefix, log_histograms=False):
@@ -193,7 +195,7 @@ def main():
       loss.backward()
       optimizer.step()
       global_step += 1
-      t_loss += loss.data[0]
+      t_loss += loss.item()
       t_loss_denom += 1
 
       if i % args.summary_frequency == 0:
@@ -207,7 +209,7 @@ def main():
           log_var_and_grad_summaries(logger, rencoder.decode_w, global_step, "Decode_W")
         log_var_and_grad_summaries(logger, rencoder.decode_b, global_step, "Decode_b")
 
-      total_epoch_loss += loss.data[0]
+      total_epoch_loss += loss.item()
       denom += 1
 
       #if args.aug_step > 0 and i % args.aug_step == 0 and i > 0:
@@ -229,7 +231,7 @@ def main():
           .format(epoch, e_end_time - e_start_time, sqrt(total_epoch_loss/denom)))
     logger.scalar_summary("Training_RMSE_per_epoch", sqrt(total_epoch_loss/denom), epoch)
     logger.scalar_summary("Epoch_time", e_end_time - e_start_time, epoch)
-    if epoch % 3 == 0 or epoch == args.num_epochs - 1:
+    if epoch % args.save_every == 0 or epoch == args.num_epochs - 1:
       eval_loss = do_eval(rencoder, eval_data_layer)
       print('Epoch {} EVALUATION LOSS: {}'.format(epoch, eval_loss))
       logger.scalar_summary("EVALUATION_RMSE", eval_loss, epoch)
@@ -238,6 +240,12 @@ def main():
 
   print("Saving model to {}".format(model_checkpoint + ".last"))
   torch.save(rencoder.state_dict(), model_checkpoint + ".last")
+
+  # save to onnx
+  dummy_input = Variable(torch.randn(params['batch_size'], data_layer.vector_dim).type(torch.float))
+  torch.onnx.export(rencoder.float(), dummy_input.cuda() if use_gpu else dummy_input, 
+                    model_checkpoint + ".onnx", verbose=True)
+  print("ONNX model saved to {}!".format(model_checkpoint + ".onnx"))
 
 if __name__ == '__main__':
   main()
